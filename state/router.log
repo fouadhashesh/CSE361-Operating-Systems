@@ -1,0 +1,94 @@
+2025-12-23 17:45:17 - Enable failed
+2025-12-23 17:57:38 - Entered privileged mode
+Tue Dec 23 17:57:38 EET 2025 - Session timeout
+2025-12-23 17:57:54 - Entered privileged mode
+2025-12-23 17:58:06 - Entered config mode
+Tue Dec 23 17:58:06 EET 2025 - SIGTERM received
+2025-12-23 18:02:46 - Entered privileged mode
+2025-12-23 18:02:51 - Entered config mode
+2025-12-23 18:03:04 - Entered interface g0/0
+2025-12-23 18:03:30 - Interface g0/0 IP set to 192.164.10.0
+2025-12-23 18:18:02 - Entered privileged mode
+2025-12-23 18:18:20 - Entered config mode
+2025-12-23 18:18:26 - Entered interface g0/0
+2025-12-23 18:18:41 - Interface g0/0 IP set to 192.168.10.0 255.255.255.0
+2025-12-23 18:22:15 - Entered privileged mode
+2025-12-23 18:22:23 - Entered config mode
+2025-12-23 18:22:30 - Entered interface g0/0
+2025-12-23 18:22:43 - Interface g0/0 IP set to 192.168.10.0 255.255.255.0
+Tue Dec 23 18:22:58 EET 2025 - Session timeout
+2025-12-23 18:23:12 - Entered privileged mode
+Tue Dec 23 18:24:09 EET 2025 - Session timeout
+2025-12-23 18:25:32 - Entered privileged mode
+2025-12-23 18:25:38 - Returned to user mode
+2025-12-23 18:25:41 - Entered privileged mode
+2025-12-23 18:25:44 - Entered config mode
+2025-12-23 18:26:00 - Entered interface g0/0
+Tue Dec 23 18:26:11 EET 2025 - Session timeout
+2025-12-23 18:32:39 - Entered privileged mode
+2025-12-23 18:32:43 - Entered config mode
+2025-12-23 18:47:53 - Entered privileged mode
+2025-12-23 18:48:02 - Entered config mode
+2025-12-23 18:48:56 - Router exited
+2025-12-23 18:52:41 - Entered privileged mode
+2025-12-23 18:52:49 - Entered config mode
+2025-12-23 18:53:52 - Router exited
+2025-12-23 19:10:35 - Entered privileged mode
+2025-12-23 19:10:55 - Entered config mode
+2025-12-23 19:11:19 - Entered interface g0/0
+2025-12-23 19:11:33 - Entered config mode
+2025-12-23 19:11:50 - Router exited
+2025-12-23 19:13:31 - Entered privileged mode
+2025-12-23 19:14:02 - Entered config mode
+2025-12-23 19:14:31 - Router exited
+2025-12-23 19:16:45 - Entered privileged mode
+2025-12-23 19:16:49 - Entered config mode
+2025-12-23 19:16:59 - Entered interface g0/0
+2025-12-23 19:17:21 - Interface g0/0 IP set to 192.168.20.0 
+2025-12-23 19:18:12 - Router exited
+2025-12-23 19:20:55 - Entered privileged mode
+2025-12-23 19:20:59 - Entered config mode
+2025-12-23 19:21:04 - Entered interface g0/0
+2025-12-23 19:21:18 - Interface g0/0 IP set to 192.168.20.0 255.255.255.0
+2025-12-23 19:21:29 - Interface g0/0 shutdown
+2025-12-23 19:21:53 - Router exited
+2025-12-23 19:22:52 - Entered privileged mode
+2025-12-23 19:22:55 - Entered config mode
+2025-12-23 19:23:01 - Entered interface g0/2
+2025-12-23 19:23:22 - Interface g0/2 IP set to 192.168.30.0 255.255.255.0
+2025-12-23 19:23:56 - Entered config mode
+2025-12-23 19:24:07 - Entered interface g0/2
+2025-12-23 19:24:10 - Interface g0/2 enabled
+2025-12-23 19:24:47 - Entered config mode
+2025-12-23 19:24:51 - Hostname set to R1
+2025-12-23 19:24:58 - Enable credentials updated
+2025-12-23 19:25:16 - Enable credentials updated
+2025-12-23 19:25:27 - Entered privileged mode
+2025-12-23 19:25:53 - Entered config mode
+2025-12-23 19:26:04 - Enable credentials updated
+2025-12-23 19:26:17 - Enable authentication failed
+2025-12-23 19:26:22 - Entered privileged mode
+2025-12-23 19:27:17 - Entered config mode
+2025-12-23 19:27:27 - Enable credentials updated
+2025-12-23 19:27:54 - Entered config mode
+2025-12-23 19:28:05 - Enable credentials updated
+2025-12-23 19:28:32 - Entered privileged mode
+2025-12-23 19:33:42 - Router exited
+2025-12-23 19:35:24 - Entered privileged mode
+2025-12-23 19:35:33 - Entered config mode
+2025-12-23 19:35:49 - Enable password set
+2025-12-23 19:36:04 - Enable secret set
+2025-12-23 19:37:00 - Enable authentication failed
+2025-12-23 19:37:04 - Entered privileged mode
+2025-12-23 19:37:16 - Router exited
+2025-12-23 19:40:38 - Entered privileged mode
+2025-12-23 19:40:41 - Entered config mode
+2025-12-23 19:41:00 - Router exited
+2025-12-23 19:41:13 - Entered privileged mode
+2025-12-23 19:41:17 - Entered config mode
+2025-12-23 19:42:36 - Entered privileged mode
+2025-12-23 19:42:40 - Entered config mode
+2025-12-23 19:43:30 - Entered privileged mode
+2025-12-23 19:43:36 - Entered config mode
+2025-12-23 19:44:10 - Added static route 192.168.20.0 via s0/0/0
+2025-12-23 19:51:24 - Entered privileged mode
