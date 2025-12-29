@@ -11,13 +11,13 @@ The system operates on a **Split-Process Architecture**, consisting of two disti
 
 ```mermaid
 graph TD
-    User[User Terminal] -->|Input| CLI[router_cli.sh]
-    CLI -->|SSH/SSHPass| Router[OpenWrt Router]
-    CLI -->|Fork/Exec| Monitor[router_monitor (PID)]
-    CLI -->|SIGUSR1 (IPC)| Monitor
-    Monitor -->|SSH/SSHPass| Router
-    Monitor -->|Writes| Log[router_monitor.log]
-    CLI -->|Reads/Writes| State[state/router_cli.conf]
+    User["User Terminal"] -->|Input| CLI["router_cli.sh"]
+    CLI -->|"SSH/SSHPass"| Router["OpenWrt Router"]
+    CLI -->|"Fork/Exec"| Monitor["router_monitor (PID)"]
+    CLI -->|"SIGUSR1 (IPC)"| Monitor
+    Monitor -->|"SSH/SSHPass"| Router
+    Monitor -->|Writes| Log["router_monitor.log"]
+    CLI -->|"Reads/Writes"| State["state/router_cli.conf"]
     Monitor -->|Reads| State
 ```
 
