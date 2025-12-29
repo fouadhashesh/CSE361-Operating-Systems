@@ -4,7 +4,7 @@
 ROUTER_IP="192.168.1.2"
 ROUTER_PORT=22
 USERNAME="root"
-PASSWORD="root"
+PASSWORD="sara"
 HOSTNAME="Router"
 
 # Global state
@@ -51,13 +51,65 @@ print_prompt() {
     echo -n "$HOSTNAME$mode_str$prompt_char "
 }
 
+# State directory
+STATE_DIR="state"
+CONF_FILE="$STATE_DIR/router_cli.conf"
+
+# Initial state loading
+mkdir -p "$STATE_DIR"
+touch "$CONF_FILE"
+
+# Load hostname if exists
+SAVED_HOSTNAME=$(grep "^hostname=" "$CONF_FILE" | cut -d= -f2)
+if [ -n "$SAVED_HOSTNAME" ]; then
+    HOSTNAME="$SAVED_HOSTNAME"
+fi
+
+check_enable_auth() {
+    mkdir -p "$STATE_DIR"
+    touch "$CONF_FILE"
+    
+    local plain=$(grep "^enable_password=" "$CONF_FILE" | cut -d= -f2)
+    local hash=$(grep "^enable_secret_hash=" "$CONF_FILE" | cut -d= -f2)
+    
+    if [ -z "$plain" ] && [ -z "$hash" ]; then
+        return 0
+    fi
+    
+    read -s -p "Password: " input
+    echo
+    
+    if [ -n "$hash" ]; then
+        # Check for sha256sum or shasum
+        if command -v sha256sum &> /dev/null; then
+             local calc=$(echo -n "$input" | sha256sum | cut -d' ' -f1)
+        else
+             local calc=$(echo -n "$input" | shasum -a 256 | cut -d' ' -f1)
+        fi
+        
+        if [ "$calc" == "$hash" ]; then
+            return 0
+        fi
+    else
+        if [ "$input" == "$plain" ]; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
 # Mode Handlers
 handle_user_mode() {
     local cmd=($1)
     case "${cmd[0]}" in
         "enable")
-            MODE="PRIVILEGED"
-            echo "% Entered privileged mode"
+            if check_enable_auth; then
+                MODE="PRIVILEGED"
+                echo "% Entered privileged mode"
+            else
+                echo "% Access denied"
+            fi
             ;;
         "exit")
             echo "Bye!"
@@ -142,6 +194,13 @@ handle_config_mode() {
                 PENDING_COMMANDS+=("uci set system.@system[0].hostname='$HOSTNAME'")
                 PENDING_COMMANDS+=("uci commit system")
                 PENDING_COMMANDS+=("/etc/init.d/system reload")
+                
+                # Persist hostname locally
+                if [ -f "$CONF_FILE" ]; then
+                     grep -v "hostname=" "$CONF_FILE" > "$CONF_FILE.tmp"
+                     mv "$CONF_FILE.tmp" "$CONF_FILE"
+                fi
+                echo "hostname=$HOSTNAME" >> "$CONF_FILE"
             else
                  echo "% Invalid command"
             fi
@@ -151,11 +210,39 @@ handle_config_mode() {
                 if [ -z "${cmd[2]}" ]; then
                     echo "% Secret required"
                 else
+                    # 1. Queue remote router password change (User Request)
                     PENDING_PASSWORD_CHANGE="${cmd[2]}"
                     echo "Enable secret (router password) change pending"
+                    
+                    # 2. Update local CLI enable secret (Modes functionality)
+                    mkdir -p "$STATE_DIR"
+                    local hash=""
+                    if command -v sha256sum &> /dev/null; then
+                        hash=$(echo -n "${cmd[2]}" | sha256sum | cut -d' ' -f1)
+                    else
+                        hash=$(echo -n "${cmd[2]}" | shasum -a 256 | cut -d' ' -f1)
+                    fi
+                    
+                    # Remove existing lines and append new
+                    if [ -f "$CONF_FILE" ]; then
+                        grep -v "enable_secret_hash=" "$CONF_FILE" | grep -v "enable_password=" > "$CONF_FILE.tmp"
+                        mv "$CONF_FILE.tmp" "$CONF_FILE"
+                    fi
+                    echo "enable_secret_hash=$hash" >> "$CONF_FILE"
                 fi
             elif [ "${cmd[1]}" == "password" ]; then
-                 echo "% Use 'enable secret' to change router password"
+                if [ -z "${cmd[2]}" ]; then
+                     echo "% Password required"
+                else
+                     echo "Enable password set (Local CLI only)"
+                     # Update local CLI enable password
+                     mkdir -p "$STATE_DIR"
+                     if [ -f "$CONF_FILE" ]; then
+                        grep -v "enable_secret_hash=" "$CONF_FILE" | grep -v "enable_password=" > "$CONF_FILE.tmp"
+                        mv "$CONF_FILE.tmp" "$CONF_FILE"
+                     fi
+                     echo "enable_password=${cmd[2]}" >> "$CONF_FILE"
+                fi
             else
                 echo "% Invalid command"
             fi
@@ -189,22 +276,61 @@ handle_config_mode() {
 
 handle_interface_mode() {
     local cmd=($1)
+    
+    # Ensure interface config file exists
+    local IF_CONF="$STATE_DIR/interfaces.conf"
+    mkdir -p "$STATE_DIR"
+    touch "$IF_CONF"
+    
+    # Escape interface name for sed
+    local IF_ESC="${CURRENT_INTERFACE//\//\\/}"
+
     case "${cmd[0]}" in
         "ip")
              # ip address <ip> <mask> -> ifconfig <iface> <ip> netmask <mask> up
              if [ "${cmd[1]}" == "address" ] && [ -n "${cmd[2]}" ] && [ -n "${cmd[3]}" ]; then
                   local if_cmd="ifconfig $CURRENT_INTERFACE ${cmd[2]} netmask ${cmd[3]} up"
                   PENDING_COMMANDS+=("$if_cmd")
+                  
+                  # Update local interface state (Modes functionality)
+                  # If entry exists, replace it. If not, append it?
+                  # modes/interface.sh assumes entry exists: sed -i "/^${IF_ESC},/c\\${CURRENT_IF},${b},${c},down"
+                  # We will append if not found for robustness, or just try sed
+                  if grep -q "^$CURRENT_INTERFACE," "$IF_CONF"; then
+                      # Mac sed differs from GNU sed. Using text file logic compatible with both if possible or just assuming GNU sed as per standard linux router environment? 
+                      # The user is on Mac (OS version: mac). Mac sed requires -i ''.
+                      if [[ "$OSTYPE" == "darwin"* ]]; then
+                          sed -i '' "/^${IF_ESC},/s/.*/${CURRENT_INTERFACE},${cmd[2]},${cmd[3]},up/" "$IF_CONF"
+                      else
+                          sed -i "/^${IF_ESC},/s/.*/${CURRENT_INTERFACE},${cmd[2]},${cmd[3]},up/" "$IF_CONF"
+                      fi
+                  else
+                      echo "${CURRENT_INTERFACE},${cmd[2]},${cmd[3]},up" >> "$IF_CONF"
+                  fi
              else
                   echo "% Invalid command"
              fi
              ;;
         "shutdown")
              PENDING_COMMANDS+=("ifconfig $CURRENT_INTERFACE down")
+             if grep -q "^$CURRENT_INTERFACE," "$IF_CONF"; then
+                  if [[ "$OSTYPE" == "darwin"* ]]; then
+                      sed -i '' "/^${IF_ESC},/s/up/down/" "$IF_CONF"
+                  else
+                      sed -i "/^${IF_ESC},/s/up/down/" "$IF_CONF"
+                  fi
+             fi
              ;;
         "no")
              if [ "${cmd[1]}" == "shutdown" ]; then
                  PENDING_COMMANDS+=("ifconfig $CURRENT_INTERFACE up")
+                 if grep -q "^$CURRENT_INTERFACE," "$IF_CONF"; then
+                     if [[ "$OSTYPE" == "darwin"* ]]; then
+                         sed -i '' "/^${IF_ESC},/s/down/up/" "$IF_CONF"
+                     else
+                         sed -i "/^${IF_ESC},/s/down/up/" "$IF_CONF"
+                     fi
+                 fi
              else
                  echo "% Invalid command"
              fi
@@ -221,6 +347,11 @@ handle_interface_mode() {
 
 # Main
 
+if [ "$1" == "--clean" ]; then
+    rm -rf "$STATE_DIR"
+    echo "[INFO] State cleared."
+fi
+ 
 if [ "$1" == "--mock" ]; then
     MockMode=true
     echo "[INFO] Running in MOCK mode. No real SSH connection."
