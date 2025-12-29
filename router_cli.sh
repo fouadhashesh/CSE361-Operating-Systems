@@ -4,7 +4,7 @@
 ROUTER_IP="192.168.1.2"
 ROUTER_PORT=22
 USERNAME="root"
-PASSWORD="sara"
+PASSWORD="root"
 HOSTNAME="Router"
 
 # Global state
