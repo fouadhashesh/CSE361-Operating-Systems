@@ -54,10 +54,164 @@ print_prompt() {
         mode_str="(config)"
     elif [ "$MODE" == "INTERFACE" ]; then
         mode_str="(config-if)"
+    elif [ "$MODE" == "WIRELESS" ]; then
+        mode_str="(config-wifi)"
     fi
 
     echo -n "$HOSTNAME$mode_str$prompt_char "
 }
+# Handles commands in Global Configuration Mode.
+# Supported commands:
+#   hostname <name>         - Set router hostname (persisted locally)
+#   enable secret <pass>    - Set privileged secret (local hash + remote change)
+#   enable password <pass>  - Set privileged password (local plain only)
+#   interface <name>        - Enter Interface Configuration Mode
+#   wireless                - Enter Wireless Configuration Mode
+#   ip route <net> ...      - Add static route
+#   exit                    - Return to Privileged Mode
+handle_config_mode() {
+    local cmd=($1)
+    case "${cmd[0]}" in
+        "hostname")
+            if [ -n "${cmd[1]}" ]; then
+                HOSTNAME="${cmd[1]}"
+                PENDING_COMMANDS+=("uci set system.@system[0].hostname='$HOSTNAME'")
+                PENDING_COMMANDS+=("uci commit system")
+                PENDING_COMMANDS+=("/etc/init.d/system reload")
+                
+                # Persist hostname locally
+                if [ -f "$CONF_FILE" ]; then
+                     grep -v "hostname=" "$CONF_FILE" > "$CONF_FILE.tmp"
+                     mv "$CONF_FILE.tmp" "$CONF_FILE"
+                fi
+                echo "hostname=$HOSTNAME" >> "$CONF_FILE"
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "enable")
+            if [ "${cmd[1]}" == "secret" ]; then
+                if [ -z "${cmd[2]}" ]; then
+                    echo "% Secret required"
+                else
+                    # 1. Queue remote router password change (User Request)
+                    PENDING_PASSWORD_CHANGE="${cmd[2]}"
+                    echo "Enable secret (router password) change pending"
+                    
+                    # 2. Update local CLI enable secret (Modes functionality)
+                    mkdir -p "$STATE_DIR"
+                    local hash=""
+                    if command -v sha256sum &> /dev/null; then
+                        hash=$(echo -n "${cmd[2]}" | sha256sum | cut -d' ' -f1)
+                    else
+                        hash=$(echo -n "${cmd[2]}" | shasum -a 256 | cut -d' ' -f1)
+                    fi
+                    
+                    # Remove existing lines and append new
+                    if [ -f "$CONF_FILE" ]; then
+                        grep -v "enable_secret_hash=" "$CONF_FILE" | grep -v "enable_password=" > "$CONF_FILE.tmp"
+                        mv "$CONF_FILE.tmp" "$CONF_FILE"
+                    fi
+                    echo "enable_secret_hash=$hash" >> "$CONF_FILE"
+                fi
+            elif [ "${cmd[1]}" == "password" ]; then
+                if [ -z "${cmd[2]}" ]; then
+                     echo "% Password required"
+                else
+                     echo "Enable password set (Local CLI only)"
+                     # Update local CLI enable password
+                     mkdir -p "$STATE_DIR"
+                     if [ -f "$CONF_FILE" ]; then
+                        grep -v "enable_secret_hash=" "$CONF_FILE" | grep -v "enable_password=" > "$CONF_FILE.tmp"
+                        mv "$CONF_FILE.tmp" "$CONF_FILE"
+                     fi
+                     echo "enable_password=${cmd[2]}" >> "$CONF_FILE"
+                fi
+            else
+                echo "% Invalid command"
+            fi
+            ;;
+        "ip")
+            if [ "${cmd[1]}" == "route" ] && [ -n "${cmd[2]}" ] && [ -n "${cmd[4]}" ]; then
+                # ip route <net> <mask?> <gateway> -> ip route add <net> via <gateway>
+                # Using positional params from C++ logic: 2=net, 4=gateway
+                 local route_cmd="ip route add ${cmd[2]} via ${cmd[4]}"
+                 PENDING_COMMANDS+=("$route_cmd")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "exit")
+            MODE="PRIVILEGED"
+            ;;
+        "interface")
+            if [ -n "${cmd[1]}" ]; then
+                CURRENT_INTERFACE="${cmd[1]}"
+                MODE="INTERFACE"
+            else
+                echo "% Invalid command"
+            fi
+            ;;
+        "wireless")
+             MODE="WIRELESS"
+            ;;
+        *)
+             echo "% Unknown command"
+            ;;
+    esac
+}
+
+# Handles commands in Wireless Configuration Mode.
+# Supported commands:
+#   ssid <name>      - Set WiFi SSID
+#   password <key>   - Set WiFi password (WPA2)
+#   hidden <yes/no>  - Hide SSID
+#   channel <num>    - Set WiFi channel
+#   exit             - Return to Global Configuration Mode
+handle_wireless_mode() {
+    local cmd=($1)
+    case "${cmd[0]}" in
+        "ssid")
+            if [ -n "${cmd[1]}" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].ssid='${cmd[1]}'")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "password")
+            if [ -n "${cmd[1]}" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].encryption='psk2'")
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].key='${cmd[1]}'")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "hidden")
+            if [ "${cmd[1]}" == "yes" ] || [ "${cmd[1]}" == "true" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].hidden='1'")
+            elif [ "${cmd[1]}" == "no" ] || [ "${cmd[1]}" == "false" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].hidden='0'")
+            else
+                 echo "% Invalid command (use yes/no)"
+            fi
+            ;;
+        "channel")
+            if [ -n "${cmd[1]}" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.radio0.channel='${cmd[1]}'")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "exit")
+            MODE="CONFIG"
+            ;;
+        *)
+            echo "% Unknown command"
+            ;;
+    esac
+}
+
+
 
 # State directory
 STATE_DIR="state"
@@ -66,6 +220,16 @@ CONF_FILE="$STATE_DIR/router_cli.conf"
 # Initial state loading
 mkdir -p "$STATE_DIR"
 touch "$CONF_FILE"
+
+# Persist connection info for monitor (Harmonization)
+if [ -f "$CONF_FILE" ]; then
+    grep -vE "^(router_ip|router_port|username|password)=" "$CONF_FILE" > "$CONF_FILE.tmp"
+    mv "$CONF_FILE.tmp" "$CONF_FILE"
+fi
+echo "router_ip=$ROUTER_IP" >> "$CONF_FILE"
+echo "router_port=$ROUTER_PORT" >> "$CONF_FILE"
+echo "username=$USERNAME" >> "$CONF_FILE"
+echo "password=$PASSWORD" >> "$CONF_FILE"
 
 # Load hostname if exists
 SAVED_HOSTNAME=$(grep "^hostname=" "$CONF_FILE" | cut -d= -f2)
@@ -142,6 +306,7 @@ handle_user_mode() {
 #   configure terminal      - Enter Global Configuration Mode
 #   show running-config     - Display pending commands and password changes
 #   show ip route           - Display remote routing table
+#   show ip interface       - Display remote interface IPs
 #   apply                   - Execute all pending commands on remote router
 #   exit                    - Return to User Mode
 handle_privileged_mode() {
@@ -170,6 +335,8 @@ handle_privileged_mode() {
                 fi
             elif [ "${cmd[1]}" == "ip" ] && [ "${cmd[2]}" == "route" ]; then
                 execute_remote_command "ip route show"
+            elif [ "${cmd[1]}" == "ip" ] && [ "${cmd[2]}" == "interface" ]; then
+                execute_remote_command "ip address show"
             else
                  echo "% Invalid command"
             fi
@@ -196,6 +363,11 @@ handle_privileged_mode() {
                          echo "% Failed to update password."
                      fi
                      PENDING_PASSWORD_CHANGE=""
+                fi
+                
+                # Notify monitor to fetch updates
+                if [ -n "$MONITOR_PID" ]; then
+                    kill -SIGUSR1 "$MONITOR_PID" 2>/dev/null
                 fi
             fi
             ;;
@@ -296,6 +468,9 @@ handle_config_mode() {
                  echo "% Invalid command"
             fi
             ;;
+        "wireless")
+             MODE="WIRELESS"
+            ;;
         "exit")
             MODE="PRIVILEGED"
             ;;
@@ -382,6 +557,66 @@ handle_interface_mode() {
     esac
 }
 
+# Handles commands in Wireless Configuration Mode.
+# Supported commands:
+#   ssid <name>      - Set WiFi SSID
+#   password <key>   - Set WiFi password (WPA2)
+#   hidden <yes/no>  - Hide SSID
+#   channel <num>    - Set WiFi channel
+#   exit             - Return to Global Configuration Mode
+handle_wireless_mode() {
+    local cmd=($1)
+    case "${cmd[0]}" in
+        "ssid")
+            if [ -n "${cmd[1]}" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].ssid='${cmd[1]}'")
+                 PENDING_COMMANDS+=("uci commit wireless")
+                 PENDING_COMMANDS+=("wifi reload")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "password")
+            if [ -n "${cmd[1]}" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].encryption='psk2'")
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].key='${cmd[1]}'")
+                 PENDING_COMMANDS+=("uci commit wireless")
+                 PENDING_COMMANDS+=("wifi reload")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "hidden")
+            if [ "${cmd[1]}" == "yes" ] || [ "${cmd[1]}" == "true" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].hidden='1'")
+                 PENDING_COMMANDS+=("uci commit wireless")
+                 PENDING_COMMANDS+=("wifi reload")
+            elif [ "${cmd[1]}" == "no" ] || [ "${cmd[1]}" == "false" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.@wifi-iface[0].hidden='0'")
+                 PENDING_COMMANDS+=("uci commit wireless")
+                 PENDING_COMMANDS+=("wifi reload")
+            else
+                 echo "% Invalid command (use yes/no)"
+            fi
+            ;;
+        "channel")
+            if [ -n "${cmd[1]}" ]; then
+                 PENDING_COMMANDS+=("uci set wireless.radio0.channel='${cmd[1]}'")
+                 PENDING_COMMANDS+=("uci commit wireless")
+                 PENDING_COMMANDS+=("wifi reload")
+            else
+                 echo "% Invalid command"
+            fi
+            ;;
+        "exit")
+            MODE="CONFIG"
+            ;;
+        *)
+            echo "% Unknown command"
+            ;;
+    esac
+}
+
 # Main
 
 if [ "$1" == "--clean" ]; then
@@ -405,6 +640,31 @@ if [ "$MockMode" = false ]; then
     fi
 fi
 
+# --- Router Monitor Integration ---
+# Compile if source exists and binary doesn't (or source is newer)
+if [ -f "router_monitor.c" ]; then
+    if [ ! -f "router_monitor" ] || [ "router_monitor.c" -nt "router_monitor" ]; then
+         echo "[INFO] Compiling router_monitor..."
+         gcc router_monitor.c -o router_monitor
+         if [ $? -ne 0 ]; then
+             echo "[WARN] Failed to compile router_monitor. Continuing without it."
+         fi
+    fi
+fi
+
+MONITOR_PID=""
+if [ -f "router_monitor" ]; then
+    # Redirect output to log file
+    ./router_monitor >> router_monitor.log 2>&1 &
+    MONITOR_PID=$!
+    # Ensure monitor is killed on exit
+    trap "kill $MONITOR_PID 2>/dev/null" EXIT
+    echo "[INFO] Started router_monitor (PID: $MONITOR_PID). Logs at router_monitor.log"
+else
+    echo "[WARN] router_monitor binary not found."
+fi
+# ----------------------------------
+
 while true; do
     print_prompt
     read -r line || break # Handle EOF
@@ -420,5 +680,6 @@ while true; do
         "PRIVILEGED") handle_privileged_mode "$line" ;;
         "CONFIG") handle_config_mode "$line" ;;
         "INTERFACE") handle_interface_mode "$line" ;;
+        "WIRELESS") handle_wireless_mode "$line" ;;
     esac
 done
