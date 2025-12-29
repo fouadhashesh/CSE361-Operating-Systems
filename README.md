@@ -1,107 +1,93 @@
-# Router CLI Documentation
+# Router CLI Tool (`router_cli.sh`)
 
-## 1. Overview
-**Router CLI** is a unified C++ application designed to control a remote OpenWrt router using a Cisco-like Command Line Interface (CLI). It bridges the gap between familiar network administration commands (e.g., `interface`, `ip address`) and the underlying Linux/OpenWrt commands (e.g., `ifconfig`, `uci`) executed via SSH.
+**router_cli.sh** is a Bash-based Command Line Interface (CLI) tool designed to manage and configure OpenWrt routers via SSH. It mimics the behavior of a standard Cisco-like router interface (User Mode, Privileged Mode, Config Mode).
 
-## 2. Architecture
+## 🚀 Features
 
-The tool is built as a single binary using `libssh2` for secure communication. It operates on a **Local-Remote Hybrid Model**:
+*   **Hierarchical Modes**: Standard navigation `User` > `Privileged` > `Config` > `Interface`.
+*   **Stateful Configuration**: Queue multiple commands and execute them in batch with `apply`.
+*   **Local Persistence**: Saves hostname, authentication credentials, and interface states locally in a `state/` directory across sessions.
+*   **Automated SSH**: Uses `sshpass` for password handling and supports legacy `ssh-rsa` key types for older routers.
+*   **Mock Mode**: built-in simulation mode for testing without a router.
 
-*   **Local Logic**: The command parser, state machine, and configuration queuing happen locally on your machine.
-*   **Remote Execution**: When you commit changes (using `apply`), translated commands are sent to the router via SSH.
+## 📋 Prerequisites
 
-### State Machine
-The CLI implements a hierarchical state machine with the following modes:
+*   `bash`
+*   `ssh`
+*   `sshpass` (Optional, for automatic password entry)
+    *   *Install on Mac:* `brew install sshpass`
+    *   *Install on Linux:* `sudo apt install sshpass`
 
-1.  **User Mode** (`>`)
-    *   Initial mode. Limited verification commands.
-2.  **Privileged Mode** (`#`)
-    *   Entered via `enable`. Allows viewing configuration and entering config mode.
-3.  **Global Configuration Mode** (`(config)#`)
-    *   Entered via `configure terminal`. Allows global changes (hostname, routing).
-4.  **Interface Configuration Mode** (`(config-if)#`)
-    *   Entered via `interface <name>`. Allows specific interface settings (IP, shutdown).
-
-### Command Queuing Strategy
-To prevent network interruptions (e.g., changing the IP address you are connected to), connectivity commands are **not executed immediately**.
-*   **Queuing**: Commands like `ip address` and `hostname` are stored in a pending list.
-*   **Execution**: The `apply` command in Privileged Mode flushes the queue, sending all commands sequentially over the SSH channel.
-
-## 3. Installation & Compilation
-
-### Dependencies
-*   **C++ Compiler** (g++ with C++11 support)
-*   **libssh2** (Development headers and library)
-
-### Compilation
-Run the following command in the project directory:
+## 🛠 Usage
 
 ```bash
-g++ router_cli.cpp -lssh2 -o router_cli
+./router_cli.sh [FLAGS]
 ```
 
-## 4. Usage Guide
+### Flags
+*   `--mock`: Run in simulation mode. No SSH connections are attempted; commands are printed to stdout.
+*   `--clean`: Clears all local state (`state/` directory) before starting.
 
-### Standard Mode
-Attempts to connect to the router at `192.168.1.2` with user `root` and password `root`.
+## 🎮 Navigation & Commands
+
+### 1. User Mode (`>`)
+The default entry mode. Limited functionality.
+*   `enable`: Enter Privileged Mode. Prompts for password if one is set.
+*   `exit`: Close the CLI.
+
+### 2. Privileged Mode (`#`)
+high-level operations and executing changes.
+*   `configure terminal` (or `conf t`): Enter Global Config Mode.
+*   `show running-config`: Display queued commands and pending changes.
+*   `show ip route`: Query the remote router's routing table.
+*   `apply`: **Execute** all pending configuration changes on the remote router via SSH.
+*   `disable`: Return to User Mode.
+
+### 3. Global Configuration Mode (`(config)#`)
+System-wide settings.
+*   `hostname <name>`: Set the router's hostname.
+    *   *Action*: Updates prompt immediately, persists locally, and queues remote hostname change.
+*   `enable secret <password>`: Set privileged access password.
+    *   *Action*: Updates local login hash immediately and queues a remote `passwd root` change.
+*   `enable password <password>`: Set local privileged access password (plaintext).
+    *   *Action*: Updates local login only.
+*   `interface <name>`: Enter Interface Config Mode for the specified interface (e.g., `eth0`).
+*   `ip route <network> <gateway>`: Add a static route.
+    *   *Example*: `ip route 192.168.2.0 255.255.255.0 192.168.1.1`
+*   `exit`: Return to Privileged Mode.
+
+### 4. Interface Configuration Mode (`(config-if)#`)
+Interface-specific settings.
+*   `ip address <ip> <mask>`: Set IP address and netmask.
+    *   *Action*: Updates local state file and queues `ifconfig` command.
+*   `shutdown`: Disable the interface.
+*   `no shutdown`: Enable the interface.
+*   `exit`: Return to Global Config Mode.
+
+## 📂 Internal Structure & State
+
+The script maintains its state in the `state/` directory, which is automatically created.
+
+### `state/router_cli.conf`
+Stores persistent router configuration:
+*   `hostname`: The last set hostname.
+*   `enable_password`: Plaintext password for `enable`.
+*   `enable_secret_hash`: SHA256 hash for secure `enable` authentication.
+
+### `state/interfaces.conf`
+Stores the local view of interface states in CSV format:
+`interface,ip_address,netmask,status`
+
+## 🔧 Configuration Variables
+
+You can modify the "Configuration" section at the top of `router_cli.sh` to target your specific device:
 
 ```bash
-./router_cli
+ROUTER_IP="192.168.1.2"    # Target Router IP
+ROUTER_PORT=22             # SSH Port
+USERNAME="root"            # SSH Username
+PASSWORD="root"            # SSH Password (used by sshpass)
 ```
 
-*Note: You can modify the `ROUTER_IP`, `USERNAME`, and `PASSWORD` macros in `router_cli.cpp` to match your environment.*
-
-### Mock Mode (Testing)
-Use this mode to test the CLI logic without a physical router. It simulates SSH success and prints the translated commands to the terminal.
-
-```bash
-./router_cli --mock
-```
-
-## 5. Command Reference
-
-### User Mode (`>`)
-| Command | Description |
-| :--- | :--- |
-| `enable` | Enter Privileged Mode. |
-| `exit` | Exit the application. |
-
-### Privileged Mode (`#`)
-| Command | Description |
-| :--- | :--- |
-| `configure terminal` / `conf t` | Enter Global Configuration Mode. |
-| `disable` | Return to User Mode. |
-| `show running-config` | Show the list of pending commands waiting to be applied. |
-| `show ip route` | Fetch and display the routing table from the remote router (`ip route show`). |
-| `apply` | **Execute all pending commands** on the remote router. |
-| `exit` | Return to User Mode. |
-
-### Global Configuration Mode (`(config)#`)
-| Command | Description | Translation (Linux/OpenWrt) |
-| :--- | :--- | :--- |
-| `hostname <name>` | Set router hostname. | `uci set system.@system[0].hostname='...'` |
-| `interface <name>` | Enter Interface Configuration Mode. | N/A (Internal State Change) |
-| `ip route <net> <mask> <gw>` | Add a static route. | `ip route add <net> via <gw>` |
-| `exit` | Return to Privileged Mode. | N/A |
-
-### Interface Configuration Mode (`(config-if)#`)
-| Command | Description | Translation (Linux/OpenWrt) |
-| :--- | :--- | :--- |
-| `ip address <ip> <mask>` | Set interface IP. | `ifconfig <iface> <ip> netmask <mask> up` |
-| `shutdown` | Disable the interface. | `ifconfig <iface> down` |
-| `no shutdown` | Enable the interface. | `ifconfig <iface> up` |
-| `exit` | Return to Global Config Mode. | N/A |
-
-## Example Workflow
-
-```bash
-enable
-configure terminal
-interface eth0
-ip address 192.168.10.1 255.255.255.0
-no shutdown
-exit
-ip route 10.0.0.0 255.0.0.0 192.168.10.254
-exit
-apply
-```
+## ⚠️ SSH Compatibility
+The script explicitly adds `-o HostKeyAlgorithms=+ssh-rsa` and `-o PubkeyAcceptedKeyTypes=+ssh-rsa` options to the SSH command. This is necessary for connecting to many older OpenWrt devices or legacy routers that only offer `ssh-rsa`, which modern SSH clients disable by default.
