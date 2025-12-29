@@ -1,118 +1,109 @@
-# router_cli - Technical Explanation
+# System Architecture & Technical Reference
 
-This document provides a comprehensive breakdown of the `router_cli` program, explaining its variable state, function logic, and execution flow.
+This document provides a deep technical dive into the **Router CLI & Monitor System**. It details the architectural decisions, inter-process communication (IPC) mechanisms, and internal logic of the components.
 
-## 1. Global State & Configuration
-The program maintains the state of the router connection and the user's current context (mode) using global variables. This simplifies the logic by avoiding passing state objects to every function.
+## 1. High-Level Architecture
 
-### Constants (`#define`)
-*   `ROUTER_IP`: The target IP address of the router (default: `192.168.1.2`).
-*   `ROUTER_PORT`: SSH port (default: `22`).
-*   `USERNAME` / `PASSWORD`: Credentials used for the SSH connection.
+The system operates on a **Split-Process Architecture**, consisting of two distinct, coupled components:
 
-### Global Variables
-*   `sock`: The raw socket file descriptor for the TCP connection.
-*   `session`: Pointer to the `LIBSSH2_SESSION` struct, managing the encrypted SSH session.
-*   `mock_mode`: Boolean flag. If `true`, the program skips actual network calls and prints commands to stdout instead.
-*   `pending_commands`: A `std::vector<std::string>` that acts as a buffer. Configuration commands are stored here and only executed when the user types `apply`.
-*   `current_mode`: An enum tracking the user's CLI location (`USER`, `PRIVILEGED`, `CONFIG`, `INTERFACE`).
-*   `current_interface`: Stores the name of the interface currently being edited (e.g., `eth0`), used only when in `MODE_INTERFACE`.
+1.  **The Controller (`router_cli.sh`)**: A Bash-based REPL (Read-Eval-Print Loop) that handles user interaction, command parsing, local state validation, and remote command execution.
+2.  **The Observer (`router_monitor`)**: A compiled C binary running as a background daemon, responsible for asynchronous state verification and logging.
 
----
-
-## 2. SSH Communication Layer
-These functions handle the low-level networking and direct interaction with the `libssh2` library.
-
-### `connect_ssh()`
-*   **Purpose**: Establishes the connection to the router.
-*   **Logic**:
-    1.  Checks if `mock_mode` is enabled. If so, returns `true` immediately.
-    2.  Initializes `libssh2`.
-    3.  Creates a standard TCP socket and connects to `ROUTER_IP`.
-    4.  Starts the SSH session handshake explicitly on that socket.
-    5.  Authenticates using the defined username and password.
-*   **Returns**: `true` on success, `false` on failure.
-
-### `execute_remote_command(const char* command)`
-*   **Purpose**: Sends a single shell command to the router for execution.
-*   **Logic**:
-    1.  If `mock_mode` is on, it simply prints `[SSH MOCK] Executing: ...` to the console.
-    2.  Opens a new "Channel" within the existing SSH session. **Note**: SSH executes every command in a new channel (similar to opening a new terminal window for each command).
-    3.  Calls `libssh2_channel_exec` to run the command on the remote server.
-    4.  Reads the output (stdout) into a 4096-byte buffer loop and prints it to the local console.
-    5.  Closes and frees the channel.
-
-### `cleanup_ssh()`
-*   **Purpose**: Gracefully shuts down the connection.
-*   **Logic**: Disconnects the session, frees the `libssh2` structures, closes the socket, and de-initializes the library.
+```mermaid
+graph TD
+    User[User Terminal] -->|Input| CLI[router_cli.sh]
+    CLI -->|SSH/SSHPass| Router[OpenWrt Router]
+    CLI -->|Fork/Exec| Monitor[router_monitor (PID)]
+    CLI -->|SIGUSR1 (IPC)| Monitor
+    Monitor -->|SSH/SSHPass| Router
+    Monitor -->|Writes| Log[router_monitor.log]
+    CLI -->|Reads/Writes| State[state/router_cli.conf]
+    Monitor -->|Reads| State
+```
 
 ---
 
-## 3. Command Line Interface (CLI) Logic
-These functions mimic the behavior of a Cisco IOS terminal.
+## 2. Component Reference
 
-### `main()` (Entry Point)
-*   **Logic Flow**:
-    1.  **Argument Parsing**: Checks for `--mock` to enable testing mode.
-    2.  **Connection**: Calls `connect_ssh()`. If it fails (and not in mock mode), the program exits.
-    3.  **REPL Loop (Read-Eval-Print Loop)**:
-        *   **Print**: Calls `print_prompt()` to show the current context (e.g., `Router(config)#`).
-        *   **Read**: Uses `std::getline` to wait for user input.
-        *   **Parse**: Calls `split_command` to break the line into tokens.
-        *   **Dispatch**: Uses a `switch` statement on `current_mode` to forward the tokens to the specific handler function (`handle_user_mode`, etc.).
+### 2.1 The Controller: `router_cli.sh`
 
-### `print_prompt()`
-*   **Logic**: Dynamically constructs the prompt string based on `current_mode` and `hostname`.
-    *   User Mode: `Router>`
-    *   Privileged: `Router#`
-    *   Config: `Router(config)#`
-    *   Interface: `Router(config-if)#`
+The CLI is designed as a **State Machine**. It maintains a global `MODE` variable that dictates which command processor is active.
 
-### `split_command(string line)`
-*   **Logic**: A helper utility that splits a string by spaces into a vector of strings (tokens). This makes parsing commands like `ip address 1.2.3.4` easier.
+*   **State Machine Phases**:
+    *   `USER`: Minimal access (`enable`, `exit`).
+    *   `PRIVILEGED`: Operational mode (`show`, `apply`, `conf t`).
+    *   `CONFIG`: Global configuration (`hostname`, `interface`, `wireless`).
+    *   `INTERFACE`: Interface-specific config (`ip address`, `shutdown`).
+    *   `WIRELESS`: WiFi-specific config (`ssid`, `channel`).
 
----
+*   **Command Queuing System**:
+    *   To support transactional behavior ("apply changes"), the CLI uses a Bash array `PENDING_COMMANDS`.
+    *   Commands are not sent immediately (except for `show` commands). They are buffered.
+    *   Upon `apply`:
+        1.  Loop mechanism iterates through `PENDING_COMMANDS`.
+        2.  Each command is wrapped in `sshpass ... ssh ...` and executed sequentially.
+        3.  Wait for exit code 0.
+        4.  If Wireless commands were present, `uci commit` and `wifi reload` acts are injected.
+        5.  `SIGUSR1` is sent to the Monitor.
 
-## 4. Mode Handlers (The State Machine)
-The core logic is divided into four functions, allowing strict control over which commands are available in which context.
+*   **Signal Traps**:
+    *   `trap "kill $MONITOR_PID" EXIT`: Registers a kernel-level trap on the script's exit signal to ensure the child process (`router_monitor`) is orphaned and cleaned up immediately, preventing zombie processes.
 
-### A. `handle_user_mode` (State: `>`)
-*   **Available Commands**:
-    *   `enable`: Switches state to `MODE_PRIVILEGED`.
-    *   `exit`: Closes the program.
+### 2.2 The Observer: `router_monitor.c`
 
-### B. `handle_privileged_mode` (State: `#`)
-*   **Available Commands**:
-    *   `configure terminal`: Switches state to `MODE_CONFIG`.
-    *   `show running-config`: Displays the contents of the `pending_commands` vector (local changes waiting to be sent).
-    *   `show ip route`: **Direct Execution**. Calls `execute_remote_command("ip route show")` immediately to fetch data from the router.
-    *   `apply`: **Critical Function**. Iterates through `pending_commands`, calls `execute_remote_command` for each one, and then clears the vector. This is the only time configuration changes are actually pushed to the router.
+The Monitor is a C99-compliant daemon designed for **Event-Driven execution**.
 
-### C. `handle_config_mode` (State: `(config)#`)
-*   **Available Commands**:
-    *   `hostname <name>`: Queues a pending command to change the hostname (using OpenWrt `uci` commands).
-    *   `interface <name>`: Switches state to `MODE_INTERFACE` and sets the global `current_interface` variable.
-    *   `ip route ...`: Queues a standard Linux `ip route add ...` command.
-    *   `exit`: Returns to `MODE_PRIVILEGED`.
+*   **Main Loop**:
+    *   Uses `sigaction` to register handlers for `SIGUSR1`, `SIGINT`, and `SIGTERM`.
+    *   Enters an infinite `sleep()` loop to conserve CPU cycles (0% idle usage).
+    *   Only wakes upon receiving a signal (Soft Interrupt).
 
-### D. `handle_interface_mode` (State: `(config-if)#`)
-*   **Context**: All commands here apply to the interface stored in `current_interface`.
-*   **Available Commands**:
-    *   `ip address <ip> <mask>`: Queues a Linux `ifconfig` command.
-    *   `shutdown`: Queues `ifconfig ... down`.
-    *   `no shutdown`: Queues `ifconfig ... up`.
-    *   `exit`: Returns to `MODE_CONFIG`.
+*   **Dynamic Configuration Parsing**:
+    *   The monitor does **logic duplication** regarding connectivity. It does *not* accept arguments. using `read_config_value()`, it parses `state/router_cli.conf` at runtime.
+    *   This ensures that if the CLI changes the target configuration (`ROUTER_IP`), the monitor adapts instantly without a restart.
+
+*   **Remote Execution (Active Fetching)**:
+    *   Uses `popen()` to spawn a shell for providing the IPC pipe.
+    *   Constructs a dynamic command string: `sshpass -p <PASS> ssh -o StrictHostKeyChecking=no <USER>@<IP> "<COMMANDS>"`.
+    *   Parses stdout line-by-line using `fgets` and prepends timestamps.
 
 ---
 
-## 5. Summary of Data Flow
+## 3. Inter-Process Communication (IPC)
 
-1.  User types: `ip address 192.168.1.1 255.255.255.0`
-2.  `main` reads string -> `split_command` creates tokens.
-3.  `handle_interface_mode` parses tokens.
-4.  **Translation**: The C++ code translates this "Cisco-style" command into a Linux command: `"ifconfig eth0 192.168.1.1 netmask 255.255.255.0 up"`.
-5.  **Queuing**: This string is pushed to `pending_commands`. Nothing is sent to the router yet.
-6.  User types: `exit`, `exit`, `apply`.
-7.  `handle_privileged_mode` sees `apply`.
-8.  **Execution**: The queue is flushed. `execute_remote_command` sends the stored `ifconfig` string over SSH.
-9.  Router executes the command.
+The system uses a hybrid IPC model:
+
+1.  **Control Plane (Signals)**:
+    *   **Synchronization**: The CLI uses `SIGUSR1` to notify the Monitor that "External State has changed". This triggers the Monitor's `fetch_router_updates()` routine.
+    *   **Lifecycle**: The CLI uses `SIGTERM` to enforce the lifecycle of the Monitor.
+
+2.  **Data Plane (Files)**:
+    *   **Shared State**: `state/router_cli.conf` acts as the shared memory segment.
+        *   **Writer**: `router_cli.sh` (exclusive write access during startup/config).
+        *   **Reader**: `router_monitor.c` (read-only access during update cycles).
+    *   **Schema**:
+        ```ini
+        router_ip=192.168.1.1
+        router_port=22
+        username=root
+        password=secret
+        hostname=OpenWrt
+        ```
+
+---
+
+## 4. Networking Protocols
+
+### 4.1 SSH Transport Layer
+The system enforces specific SSH options to maximize compatibility with embedded routers (often running older Dropbear versions):
+*   `-o StrictHostKeyChecking=no`: Disables interactive host verification (essential for automation).
+*   `-o HostKeyAlgorithms=+ssh-rsa`: Forces usage of legacy RSA keys (often disabled in modern OpenSSL).
+*   `-o PubkeyAcceptedKeyTypes=+ssh-rsa`: Accepts RSA public keys.
+
+### 4.2 OpenWrt UCI Subsystem
+The system abstracts the OpenWrt **Unified Configuration Interface (UCI)**:
+*   **Set**: `uci set <config>.<section>.<option>='<value>'` (buffers change in RAM).
+*   **Commit**: `uci commit <config>` (flushes RAM buffer to `/etc/config/`).
+*   **Reload**: `/etc/init.d/<service> reload` or `wifi reload` (applies config to running daemons).
+
+The CLI abstracts this complexity; the user types `ssid MyNet`, and the CLI generates the specific `uci` chain required.
