@@ -1,93 +1,104 @@
-# Router CLI Tool (`router_cli.sh`)
+# Router CLI Tool and Monitor
 
-**router_cli.sh** is a Bash-based Command Line Interface (CLI) tool designed to manage and configure OpenWrt routers via SSH. It mimics the behavior of a standard Cisco-like router interface (User Mode, Privileged Mode, Config Mode).
+This project provides a robust, bash-based Command Line Interface (CLI) for managing OpenWrt routers, paired with a C-based background monitor implementation for real-time state tracking.
 
-## 🚀 Features
+## 🚀 Key Features
 
-*   **Hierarchical Modes**: Standard navigation `User` > `Privileged` > `Config` > `Interface`.
-*   **Stateful Configuration**: Queue multiple commands and execute them in batch with `apply`.
-*   **Local Persistence**: Saves hostname, authentication credentials, and interface states locally in a `state/` directory across sessions.
-*   **Automated SSH**: Uses `sshpass` for password handling and supports legacy `ssh-rsa` key types for older routers.
-*   **Mock Mode**: built-in simulation mode for testing without a router.
+*   **Bash CLI (`router_cli.sh`)**: A full-featured CLI mimicking Cisco IOS behavior (User > Privileged > Config > Interface/Wireless).
+*   **Active Monitor (`router_monitor`)**: A background C program that automatically fetches and logs router state (Hostname, IP, Interfaces) whenever changes are applied.
+*   **Wireless Configuration**: Dedicated mode for managing WiFi SSID, password, channel, and visibility.
+*   **Instant Application**: WiFi changes are committed and reloaded instantly.
+*   **Harmonized State**: The CLI and Monitor share configuration (IP, Credentials) dynamically.
+*   **Local Persistence**: Saves hostname, interface config, and authentication locally across sessions.
+*   **SSH Compatibility**: Built-in support for legacy `ssh-rsa` routers and `sshpass` for password automation.
+
+---
 
 ## 📋 Prerequisites
 
-*   `bash`
-*   `ssh`
-*   `sshpass` (Optional, for automatic password entry)
-    *   *Install on Mac:* `brew install sshpass`
-    *   *Install on Linux:* `sudo apt install sshpass`
+*   `bash` (Main shell)
+*   `gcc` (To compile the monitor)
+*   `ssh` client
+*   `sshpass` (Optional, but recommended for automatic login)
+    *   Mac: `brew install sshpass`
+    *   Linux: `sudo apt install sshpass`
+
+---
 
 ## 🛠 Usage
 
-```bash
-./router_cli.sh [FLAGS]
-```
+1.  **Start the CLI**:
+    ```bash
+    ./router_cli.sh
+    ```
+    *   *Note*: On first run, it compiles `router_monitor.c` automatically.
 
-### Flags
-*   `--mock`: Run in simulation mode. No SSH connections are attempted; commands are printed to stdout.
-*   `--clean`: Clears all local state (`state/` directory) before starting.
+2.  **Flags**:
+    *   `--mock`: Run in simulation mode (no SSH connection).
+    *   `--clean`: Wipe local state (`state/` directory) and start fresh.
 
-## 🎮 Navigation & Commands
+---
+
+## 🎮 Command Reference
 
 ### 1. User Mode (`>`)
-The default entry mode. Limited functionality.
-*   `enable`: Enter Privileged Mode. Prompts for password if one is set.
+Default entry mode.
+*   `enable`: Enter Privileged Mode (Prompts for password if set).
 *   `exit`: Close the CLI.
 
 ### 2. Privileged Mode (`#`)
-high-level operations and executing changes.
+high-level viewing and applying.
 *   `configure terminal` (or `conf t`): Enter Global Config Mode.
-*   `show running-config`: Display queued commands and pending changes.
-*   `show ip route`: Query the remote router's routing table.
-*   `apply`: **Execute** all pending configuration changes on the remote router via SSH.
+*   `show running-config`: View queued changes.
+*   `show ip route`: View remote routing table.
+*   `show ip interface`: **[NEW]** View all remote interface IP addresses.
+*   `apply`: Execute all queued commands on the router. **Triggers Monitor Update**.
 *   `disable`: Return to User Mode.
 
-### 3. Global Configuration Mode (`(config)#`)
-System-wide settings.
-*   `hostname <name>`: Set the router's hostname.
-    *   *Action*: Updates prompt immediately, persists locally, and queues remote hostname change.
-*   `enable secret <password>`: Set privileged access password.
-    *   *Action*: Updates local login hash immediately and queues a remote `passwd root` change.
-*   `enable password <password>`: Set local privileged access password (plaintext).
-    *   *Action*: Updates local login only.
-*   `interface <name>`: Enter Interface Config Mode for the specified interface (e.g., `eth0`).
-*   `ip route <network> <gateway>`: Add a static route.
-    *   *Example*: `ip route 192.168.2.0 255.255.255.0 192.168.1.1`
+### 3. Global Configuration (`(config)#`)
+*   `hostname <name>`: Set system hostname.
+*   `enable secret <pass>`: Set privileged password (updates local & remote).
+*   `interface <name>`: Enter Interface Config Mode.
+*   `wireless`: **[NEW]** Enter Wireless Config Mode.
+*   `ip route <net> <mask> <gw>`: Add static route.
 *   `exit`: Return to Privileged Mode.
 
-### 4. Interface Configuration Mode (`(config-if)#`)
-Interface-specific settings.
-*   `ip address <ip> <mask>`: Set IP address and netmask.
-    *   *Action*: Updates local state file and queues `ifconfig` command.
-*   `shutdown`: Disable the interface.
-*   `no shutdown`: Enable the interface.
-*   `exit`: Return to Global Config Mode.
+### 4. Interface Configuration (`(config-if)#`)
+*   `ip address <ip> <mask>`: Set IP.
+*   `shutdown` / `no shutdown`: Disable/Enable interface.
+*   `exit`: Back to Config Mode.
 
-## 📂 Internal Structure & State
+### 5. Wireless Configuration (`(config-wifi)#`)
+**[NEW]** Manage WiFi settings. Changes perform `uci commit` and `wifi reload` instantly on `apply`.
+*   `ssid <name>`: Set WiFi SSID.
+*   `password <key>`: Set WPA2 password.
+*   `hidden <yes/no>`: Hide network SSID.
+*   `channel <num>`: Set radio channel.
+*   `exit`: Back to Config Mode.
 
-The script maintains its state in the `state/` directory, which is automatically created.
+---
 
-### `state/router_cli.conf`
-Stores persistent router configuration:
-*   `hostname`: The last set hostname.
-*   `enable_password`: Plaintext password for `enable`.
-*   `enable_secret_hash`: SHA256 hash for secure `enable` authentication.
+## 📡 Router Monitor
 
-### `state/interfaces.conf`
-Stores the local view of interface states in CSV format:
-`interface,ip_address,netmask,status`
+The system automatically launches a companion C program, `router_monitor`, in the background.
 
-## 🔧 Configuration Variables
+*   **Lifecycle**: Auto-started by `router_cli.sh`, killed on exit.
+*   **Logging**: Writes to `router_monitor.log`.
+*   **Function**:
+    *   Listens for `SIGUSR1` signals (sent by CLI `apply` command).
+    *   **Actively Fetches**: Connects to the router via SSH to pull `uci show system` and `ip address show`.
+    *   **Logs**: Timestamps and records the fetched state to the log file.
+    *   **Shared Config**: Reads IP/User/Pass from `state/router_cli.conf` to match the CLI's connection settings.
 
-You can modify the "Configuration" section at the top of `router_cli.sh` to target your specific device:
+---
 
-```bash
-ROUTER_IP="192.168.1.2"    # Target Router IP
-ROUTER_PORT=22             # SSH Port
-USERNAME="root"            # SSH Username
-PASSWORD="root"            # SSH Password (used by sshpass)
-```
+## 📂 Internal State
+
+State is stored in `state/`:
+*   `router_cli.conf`: Persists Hostname, Auth, and **Connection Details** (IP, User, Port).
+*   `interfaces.conf`: Persists Interface settings.
+
+---
 
 ## ⚠️ SSH Compatibility
-The script explicitly adds `-o HostKeyAlgorithms=+ssh-rsa` and `-o PubkeyAcceptedKeyTypes=+ssh-rsa` options to the SSH command. This is necessary for connecting to many older OpenWrt devices or legacy routers that only offer `ssh-rsa`, which modern SSH clients disable by default.
+The script uses `-o HostKeyAlgorithms=+ssh-rsa` to support older OpenWrt devices.
