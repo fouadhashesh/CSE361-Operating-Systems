@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Configuration
-ROUTER_IP="192.168.1.2"
-ROUTER_PORT=22
-USERNAME="root"
-PASSWORD="root"
-HOSTNAME="Router"
+ROUTER_IP="192.168.1.2" # Default router IP
+ROUTER_PORT=22 # Default router port for ssh
+USERNAME="root" # Default username
+PASSWORD="root" # Default password for ssh
+HOSTNAME="Router" # Default hostname
 
 # Global state
 MODE="USER" # USER, PRIVILEGED, CONFIG, INTERFACE
@@ -15,6 +15,12 @@ PENDING_PASSWORD_CHANGE=""
 MockMode=false
 
 # Helper Functions
+# Executes a command on the remote router via SSH.
+# Uses 'sshpass' if available to handle password authentication automatically.
+# In mock mode, it simply prints the command to stdout.
+#
+# Arguments:
+#   $1 - The command string to execute
 execute_remote_command() {
     local cmd="$1"
     if [ "$MockMode" = true ]; then
@@ -35,6 +41,8 @@ execute_remote_command() {
     fi
 }
 
+# Displays the CLI prompt based on the current mode and hostname.
+# Format: [Hostname][(mode)]> or #
 print_prompt() {
     local prompt_char=">"
     if [ "$MODE" != "USER" ]; then
@@ -65,6 +73,9 @@ if [ -n "$SAVED_HOSTNAME" ]; then
     HOSTNAME="$SAVED_HOSTNAME"
 fi
 
+# Verifies the user's password against the stored local configuration.
+# Checks for both plaintext password (enable_password) and SHA256/SHASum hash (enable_secret_hash).
+# Returns 0 on success, 1 on failure.
 check_enable_auth() {
     mkdir -p "$STATE_DIR"
     touch "$CONF_FILE"
@@ -100,6 +111,10 @@ check_enable_auth() {
 }
 
 # Mode Handlers
+# Handles commands in User Mode (default mode).
+# Supported commands:
+#   enable - Switch to Privileged Mode (requires auth)
+#   exit   - Terminate the CLI session
 handle_user_mode() {
     local cmd=($1)
     case "${cmd[0]}" in
@@ -121,6 +136,14 @@ handle_user_mode() {
     esac
 }
 
+# Handles commands in Privileged Exec Mode.
+# Supported commands:
+#   disable                 - Return to User Mode
+#   configure terminal      - Enter Global Configuration Mode
+#   show running-config     - Display pending commands and password changes
+#   show ip route           - Display remote routing table
+#   apply                   - Execute all pending commands on remote router
+#   exit                    - Return to User Mode
 handle_privileged_mode() {
     local cmd=($1)
     case "${cmd[0]}" in
@@ -185,6 +208,14 @@ handle_privileged_mode() {
     esac
 }
 
+# Handles commands in Global Configuration Mode.
+# Supported commands:
+#   hostname <name>         - Set router hostname (persisted locally)
+#   enable secret <pass>    - Set privileged secret (local hash + remote change)
+#   enable password <pass>  - Set privileged password (local plain only)
+#   interface <name>        - Enter Interface Configuration Mode
+#   ip route <net> ...      - Add static route
+#   exit                    - Return to Privileged Mode
 handle_config_mode() {
     local cmd=($1)
     case "${cmd[0]}" in
@@ -274,6 +305,12 @@ handle_config_mode() {
     esac
 }
 
+# Handles commands in Interface Configuration Mode.
+# Supported commands:
+#   ip address <ip> <mask>  - Set interface IP and mask
+#   shutdown                - Disable interface
+#   no shutdown             - Enable interface
+#   exit                    - Return to Global Configuration Mode
 handle_interface_mode() {
     local cmd=($1)
     
