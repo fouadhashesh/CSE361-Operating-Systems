@@ -15,8 +15,7 @@ PENDING_PASSWORD_CHANGE=""
 MockMode=false
 
 # Helper Functions
-# Executes a command on the remote router via SSH.
-# Uses 'sshpass' if available to handle password authentication automatically.
+# Executes a command on the remote router via SSH
 # In mock mode, it simply prints the command to stdout.
 #
 # Arguments:
@@ -300,7 +299,7 @@ handle_user_mode() {
     esac
 }
 
-# Handles commands in Privileged Exec Mode.
+#handles commands in Privileged Exec Mode
 # Supported commands:
 #   disable                 - Return to User Mode
 #   configure terminal      - Enter Global Configuration Mode
@@ -380,7 +379,7 @@ handle_privileged_mode() {
     esac
 }
 
-# Handles commands in Global Configuration Mode.
+# Global Configuration commands .
 # Supported commands:
 #   hostname <name>         - Set router hostname (persisted locally)
 #   enable secret <pass>    - Set privileged secret (local hash + remote change)
@@ -413,11 +412,11 @@ handle_config_mode() {
                 if [ -z "${cmd[2]}" ]; then
                     echo "% Secret required"
                 else
-                    # 1. Queue remote router password change (User Request)
+                    # 1.queue remote router password change (User Request)
                     PENDING_PASSWORD_CHANGE="${cmd[2]}"
                     echo "Enable secret (router password) change pending"
                     
-                    # 2. Update local CLI enable secret (Modes functionality)
+                    # 2. update local CLI enable secret (Modes functionality)
                     mkdir -p "$STATE_DIR"
                     local hash=""
                     if command -v sha256sum &> /dev/null; then
@@ -426,7 +425,7 @@ handle_config_mode() {
                         hash=$(echo -n "${cmd[2]}" | shasum -a 256 | cut -d' ' -f1)
                     fi
                     
-                    # Remove existing lines and append new
+                    # remove existing lines and append new
                     if [ -f "$CONF_FILE" ]; then
                         grep -v "enable_secret_hash=" "$CONF_FILE" | grep -v "enable_password=" > "$CONF_FILE.tmp"
                         mv "$CONF_FILE.tmp" "$CONF_FILE"
@@ -489,12 +488,12 @@ handle_config_mode() {
 handle_interface_mode() {
     local cmd=($1)
     
-    # Ensure interface config file exists
+    # ensure interface config file exists
     local IF_CONF="$STATE_DIR/interfaces.conf"
     mkdir -p "$STATE_DIR"
     touch "$IF_CONF"
     
-    # Escape interface name for sed
+    #escape interface name for sed
     local IF_ESC="${CURRENT_INTERFACE//\//\\/}"
 
     case "${cmd[0]}" in
@@ -504,13 +503,13 @@ handle_interface_mode() {
                   local if_cmd="ifconfig $CURRENT_INTERFACE ${cmd[2]} netmask ${cmd[3]} up"
                   PENDING_COMMANDS+=("$if_cmd")
                   
-                  # Update local interface state (Modes functionality)
-                  # If entry exists, replace it. If not, append it?
-                  # modes/interface.sh assumes entry exists: sed -i "/^${IF_ESC},/c\\${CURRENT_IF},${b},${c},down"
-                  # We will append if not found for robustness, or just try sed
+                  #update the interface configuration file used by interface modes
+                  # If the interface already exists, update its entry
+                  # Otherwise, add a new entry
                   if grep -q "^$CURRENT_INTERFACE," "$IF_CONF"; then
-                      # Mac sed differs from GNU sed. Using text file logic compatible with both if possible or just assuming GNU sed as per standard linux router environment? 
-                      # The user is on Mac (OS version: mac). Mac sed requires -i ''.
+                        # sed behaves differently on macOS and Linux
+                        # macOS requires an empty string after -i, while Linux does not
+                        # check the OS type to apply the correct sed syntax
                       if [[ "$OSTYPE" == "darwin"* ]]; then
                           sed -i '' "/^${IF_ESC},/s/.*/${CURRENT_INTERFACE},${cmd[2]},${cmd[3]},up/" "$IF_CONF"
                       else
@@ -557,8 +556,8 @@ handle_interface_mode() {
     esac
 }
 
-# Handles commands in Wireless Configuration Mode.
-# Supported commands:
+# wireless config mode commands
+#supported commands:
 #   ssid <name>      - Set WiFi SSID
 #   password <key>   - Set WiFi password (WPA2)
 #   hidden <yes/no>  - Hide SSID
@@ -629,7 +628,7 @@ if [ "$1" == "--mock" ]; then
     echo "[INFO] Running in MOCK mode. No real SSH connection."
 fi
 
-# Basic check for SSH connectivity if not mock (simplified)
+#check for SSH connectivity if not mock (simplified)
 if [ "$MockMode" = false ]; then
     # Netcat check to see if port is open
     nc -z -w 2 "$ROUTER_IP" "$ROUTER_PORT"
@@ -640,8 +639,8 @@ if [ "$MockMode" = false ]; then
     fi
 fi
 
-# --- Router Monitor Integration ---
-# Compile if source exists and binary doesn't (or source is newer)
+#router monitor.c 
+#compile if source exists and binary doesn't (or source is newer)
 if [ -f "router_monitor.c" ]; then
     if [ ! -f "router_monitor" ] || [ "router_monitor.c" -nt "router_monitor" ]; then
          echo "[INFO] Compiling router_monitor..."
@@ -654,22 +653,22 @@ fi
 
 MONITOR_PID=""
 if [ -f "router_monitor" ]; then
-    # Redirect output to log file
+    #output to log file
     ./router_monitor >> router_monitor.log 2>&1 &
     MONITOR_PID=$!
-    # Ensure monitor is killed on exit
+    #ensure monitor is killed on exit
     trap "kill $MONITOR_PID 2>/dev/null" EXIT
     echo "[INFO] Started router_monitor (PID: $MONITOR_PID). Logs at router_monitor.log"
 else
     echo "[WARN] router_monitor binary not found."
 fi
-# ----------------------------------
+
 
 while true; do
     print_prompt
     read -r line || break # Handle EOF
     
-    # Trim leading/trailing whitespace
+    # trim leading/trailing whitespace
     line=$(echo "$line" | xargs)
     if [ -z "$line" ]; then
         continue
