@@ -59,7 +59,7 @@ print_prompt() {
 
     echo -n "$HOSTNAME$mode_str$prompt_char "
 }
-# Handles commands in Global Configuration Mode.
+# handles commands in Global Configuration Mode
 # Supported commands:
 #   hostname <name>         - Set router hostname (persisted locally)
 #   enable secret <pass>    - Set privileged secret (local hash + remote change)
@@ -160,7 +160,7 @@ handle_config_mode() {
     esac
 }
 
-# Handles commands in Wireless Configuration Mode.
+# handles commands in Wireless Configuration Mode.
 # Supported commands:
 #   ssid <name>      - Set WiFi SSID
 #   password <key>   - Set WiFi password (WPA2)
@@ -379,7 +379,7 @@ handle_privileged_mode() {
     esac
 }
 
-# Global Configuration commands .
+# handles commands in Global Configuration mode
 # Supported commands:
 #   hostname <name>         - Set router hostname (persisted locally)
 #   enable secret <pass>    - Set privileged secret (local hash + remote change)
